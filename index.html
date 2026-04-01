@@ -44,7 +44,6 @@
 
         .content-z { z-index: 10; }
         
-        /* AI Assistant Panel */
         #ai-assistant-panel {
             position: fixed; bottom: 20px; left: 20px;
             width: 450px; height: 550px; background: white; border-radius: 24px;
@@ -96,7 +95,6 @@
     <div class="banner-container">
         <div class="shape-gradient"></div>
 
-        <!-- Left Section: Branding & Info -->
         <div class="w-[60%] h-full flex flex-col justify-center px-10 md:px-20 content-z py-10">
             <div class="flex items-center gap-5 mb-6">
                 <div class="w-20 h-20 md:w-24 md:h-24 bg-white rounded-3xl flex items-center justify-center shadow-xl border border-emerald-100 p-2">
@@ -144,7 +142,6 @@
             </div>
         </div>
 
-        <!-- Right Section: Visual Decoration -->
         <div class="w-[40%] h-64 md:h-full relative overflow-hidden">
             <img src="https://images.unsplash.com/photo-1598440441973-19961633f867?q=80&w=1600" alt="Skincare Products" class="w-full h-full object-cover">
             <div class="absolute inset-0 bg-emerald-900/10 mix-blend-multiply"></div>
@@ -174,7 +171,7 @@
                     <br><br>
                     يمكنني مساعدتكِ في:
                     - اقتراح روتين كامل لبشرتكِ.
-                    - شرح فوائد المكونات (مثل الريتينول وفيتامين C).
+                    - شرح فوائد المكونات.
                     - حل مشاكل الحبوب أو التصبغات.
                     <br>
                     **ما الذي يشغل بالكِ اليوم؟**
@@ -184,14 +181,14 @@
             <div id="loading-overlay" class="loading-overlay">
                 <div class="flex flex-col items-center gap-3">
                     <div class="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
-                    <p class="text-emerald-700 font-bold text-sm">جاري تحليل مشكلتك بذكاء...</p>
+                    <p class="text-emerald-700 font-bold text-sm">جاري التفكير...</p>
                 </div>
             </div>
 
             <div class="p-4 bg-white border-t">
                 <div class="flex gap-2">
-                    <input type="text" id="user-input" placeholder="اكتبي مشكلتك هنا (مثلاً: روتين للبشرة الجافة)..." class="flex-1 bg-gray-50 border-2 border-transparent focus:border-emerald-500 rounded-xl px-4 py-3 outline-none transition-all text-sm">
-                    <button onclick="askGemini()" class="bg-emerald-600 text-white w-12 h-12 rounded-xl flex items-center justify-center hover:bg-emerald-700 transition-all shadow-lg shrink-0">
+                    <input type="text" id="user-input" placeholder="اكتبي مشكلتك هنا..." class="flex-1 bg-gray-50 border-2 border-transparent focus:border-emerald-500 rounded-xl px-4 py-3 outline-none transition-all text-sm">
+                    <button id="send-btn" onclick="askGemini()" class="bg-emerald-600 text-white w-12 h-12 rounded-xl flex items-center justify-center hover:bg-emerald-700 transition-all shadow-lg shrink-0">
                         <i class="fa-solid fa-paper-plane"></i>
                     </button>
                 </div>
@@ -199,12 +196,13 @@
         </div>
     </div>
 
-    <!-- Notification Toast -->
-    <div id="toast">تم نسخ رابط المشاركة بنجاح! 🔗</div>
+    <div id="toast">تم النسخ بنجاح! 🔗</div>
 
     <script>
-        const apiKey = ""; // سيتم تفعيل المفتاح تلقائياً من البيئة
-        let conversation = [];
+        // API Key is empty string - it will be injected by the environment if hosted properly
+        // or you need to provide one from Google AI Studio for local testing.
+        const apiKey = ""; 
+        let chatHistory = [];
 
         function toggleAIPanel() {
             const panel = document.getElementById('ai-assistant-panel');
@@ -213,6 +211,7 @@
 
         function showLoading(show) {
             document.getElementById('loading-overlay').style.display = show ? 'flex' : 'none';
+            document.getElementById('send-btn').disabled = show;
         }
 
         async function askGemini(predefinedText = null) {
@@ -224,7 +223,10 @@
             appendMessage(text, 'user');
             showLoading(true);
 
-            const sysPrompt = `أنت خبير تجميل وصيدلي في محل Mermondialsante بالمغير (حي العالية).
+            // Add user message to history
+            chatHistory.push({ role: "user", parts: [{ text: text }] });
+
+            const systemPrompt = `أنت خبير تجميل وصيدلي في محل Mermondialsante بالمغير (حي العالية).
             تحدث باللهجة الجزائرية البيضاء الودودة ✨. 
             قواعدك:
             1. اقترح روتينات من ماركاتنا (Eucerin, La Roche-Posay, Noreva, Avene, Bioderma, ACM).
@@ -232,21 +234,43 @@
             3. شجع دائماً على الفحص المجاني في المحل مقابل العيادة الجوارية.
             4. أضف الرموز التعبيرية 🧴🌿✨.`;
 
-            try {
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: text }] }],
-                        systemInstruction: { parts: [{ text: sysPrompt }] }
-                    })
-                });
+            // Exponential backoff for API calls
+            const callWithRetry = async (url, options, retries = 5, delay = 1000) => {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    return await response.json();
+                } catch (error) {
+                    if (retries > 0) {
+                        await new Uint8Array(delay); // Wait
+                        return callWithRetry(url, options, retries - 1, delay * 2);
+                    }
+                    throw error;
+                }
+            };
 
-                const data = await response.json();
-                const aiMsg = data.candidates?.[0]?.content?.parts?.[0]?.text || "عذراً حبيبتي، واجهت مشكلة تقنية صغيرة. حاولي مرة أخرى! ✨";
+            try {
+                const result = await callWithRetry(
+                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: chatHistory,
+                            systemInstruction: { parts: [{ text: systemPrompt }] }
+                        })
+                    }
+                );
+
+                const aiMsg = result.candidates?.[0]?.content?.parts?.[0]?.text || "عذراً حبيبتي، لم أستطع فهم الطلب بشكل كامل.";
+                
+                // Save AI response to history
+                chatHistory.push({ role: "model", parts: [{ text: aiMsg }] });
+                
                 appendMessage(aiMsg, 'ai', true);
             } catch (error) {
-                appendMessage("حدث خطأ في الاتصال. يرجى مراجعة الرابط أو المحاولة لاحقاً 🌿", 'ai');
+                console.error("Gemini Error:", error);
+                appendMessage("حبيبتي، يبدو أن هناك ضغطاً كبيراً على النظام أو مشكلة في مفتاح التشغيل. حاولي إعادة المحاولة لاحقاً! ✨", 'ai');
             } finally {
                 showLoading(false);
             }
@@ -257,7 +281,6 @@
             const div = document.createElement('div');
             div.className = `msg msg-${role}`;
             
-            // Basic formatting for Markdown bold
             let formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
             div.innerHTML = formatted;
 
@@ -266,7 +289,7 @@
                 tools.className = 'flex flex-wrap gap-2 mt-3';
                 
                 const btnRoutine = createBtn('<i class="fa-solid fa-list-check"></i> تفصيل الروتين', () => askGemini("بناءً على نصيحتك، رتبي لي الخطوات كروتين صباحي ومسائي مفصل ✨"));
-                const btnSpeak = createBtn('<i class="fa-solid fa-volume-high"></i> استماع للنصيحة', () => speakText(text));
+                const btnSpeak = createBtn('<i class="fa-solid fa-volume-high"></i> استماع', () => speakText(text));
                 
                 tools.appendChild(btnRoutine);
                 tools.appendChild(btnSpeak);
@@ -295,7 +318,7 @@
                         contents: [{ parts: [{ text: `Say warmly in Arabic: ${text.substring(0, 300)}` }] }],
                         generationConfig: {
                             responseModalities: ["AUDIO"],
-                            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Leda" } } }
+                            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } }
                         }
                     })
                 });
@@ -330,14 +353,9 @@
             el.select();
             document.execCommand('copy');
             document.body.removeChild(el);
-            
             const toast = document.getElementById('toast');
-            toast.style.opacity = '1';
-            toast.style.transform = 'translateY(0)';
-            setTimeout(() => {
-                toast.style.opacity = '0';
-                toast.style.transform = 'translateY(100px)';
-            }, 3000);
+            toast.style.opacity = '1'; toast.style.transform = 'translateY(0)';
+            setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateY(100px)'; }, 3000);
         }
 
         document.getElementById('user-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') askGemini(); });
